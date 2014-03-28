@@ -9,6 +9,7 @@
 #import "ViewController.h"
 #import <arpa/inet.h>
 #import "GCDAsyncSocket.h"
+#import <PebbleKit/PebbleKit.h>
 
 @interface ViewController ()
 
@@ -16,6 +17,7 @@
 @property (strong, nonatomic) NSNetService          *netService;
 @property (strong, nonatomic) NSMutableArray        *serverAddresses;
 @property (strong, nonatomic) GCDAsyncSocket        *socket;
+@property (strong, nonatomic) PBWatch               *connectedWatch;
 
 @end
 
@@ -26,7 +28,7 @@ bool connected = NO;
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-
+    [[PBPebbleCentral defaultCentral] setDelegate:self];
     [self initEverything];
 }
 
@@ -38,6 +40,16 @@ bool connected = NO;
     _socket = [[GCDAsyncSocket alloc] initWithDelegate:self
                                          delegateQueue:dispatch_get_main_queue()
                                            socketQueue:_socketQueue];
+    
+    [self setConnectedWatch:[[PBPebbleCentral defaultCentral] lastConnectedWatch]];
+    NSLog(@"Last connected Watch: %@", _connectedWatch);
+    if ([_connectedWatch isConnected])
+    {
+        NSLog(@"Watch is connected!");
+    }
+    
+    
+    [self sendStringToWatch:@"Hello From iOS!"];
 }
 
 - (void)didReceiveMemoryWarning
@@ -172,6 +184,14 @@ bool connected = NO;
     [_socket readDataWithTimeout:-1 tag:0];
 }
 
+typedef enum
+{
+    RepoManagerClean = 0,
+    RepoManagerDirty = 1,
+    RepoManagerEmpty = 2,
+    RepoManagerBare = 3
+} RepoManagerOverallStatus;
+
 /**
  * Called when a socket has completed reading the requested data into memory.
  * Not called if there is an error.
@@ -179,7 +199,48 @@ bool connected = NO;
 - (void)socket:(GCDAsyncSocket *)sock didReadData:(NSData *)data withTag:(long)tag
 {
     NSString *msg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    
+    NSError *convertError;
+    NSDictionary *message = [NSJSONSerialization JSONObjectWithData:data options:0 error:&convertError];
     [_MessageBox setText:msg];
+    
+    NSString *messageToSend;
+    
+    
+    if ([message objectForKey:@"Status"])
+    {
+        /*NSNumber *statusNumber = [message objectForKey:@"Status"];
+        int status = statusNumber.intValue;
+        
+        switch (status)
+        {
+            case RepoManagerClean:
+                messageToSend = @"Status: Clean";
+                break;
+            case RepoManagerBare:
+                messageToSend = @"Status: Bare";
+                break;
+            case RepoManagerEmpty:
+                messageToSend = @"Status: Empty";
+                break;
+            case RepoManagerDirty:
+                messageToSend = @"Status: Dirty";
+                break;
+        }*/
+    }
+    
+    if ([message objectForKey:@"Path"])
+    {
+        messageToSend = @"File: ";
+        messageToSend = [messageToSend stringByAppendingString:[message objectForKey:@"Path"]];
+    }
+    
+    if ([message objectForKey:@"alertMessage"])
+    {
+        messageToSend = [message objectForKey:@"alertMessage"];
+    }
+    
+    [self sendStringToWatch:messageToSend];
     NSLog(@"Read . tag = %ld, msg = %@",tag,msg);
     [_socket readDataWithTimeout:-1 tag:0];
     
@@ -207,6 +268,51 @@ bool connected = NO;
     NSLog(@"Disconnected .");
     [_statusLabel setText:@"Disconnected"];
     
+}
+
+#pragma mark -PBCentral Delegate Methods
+
+- (void)pebbleCentral:(PBPebbleCentral *)central watchDidConnect:(PBWatch *)watch isNew:(BOOL)isNew
+{
+    NSLog(@"Watch Did Connect!");
+}
+
+- (void)pebbleCentral:(PBPebbleCentral *)central watchDidDisconnect:(PBWatch *)watch
+{
+    NSLog(@"Watch Did DisConnect!!");
+}
+
+- (void)setConnectedWatch:(PBWatch *)watch
+{
+    _connectedWatch = watch;
+    
+    uuid_t myPebbleAppUUIDBytes;
+    NSUUID *myPebbleAppUUID = [[NSUUID alloc] initWithUUIDString:@"b41f0324-3d7d-41d9-8f0c-7dffe5aa2c3e"];
+    [myPebbleAppUUID getUUIDBytes:myPebbleAppUUIDBytes];
+    [[PBPebbleCentral defaultCentral] setAppUUID:[NSData dataWithBytes:myPebbleAppUUIDBytes length:16]];
+    
+}
+
+- (void)sendStringToWatch:(NSString *)sendMe
+{
+    if (!sendMe)
+    {
+        sendMe = @"";
+    }
+    NSDictionary *update = @{ @(0):[NSNumber numberWithInt:42],
+                              @(1):sendMe};
+    
+    [_connectedWatch appMessagesPushUpdate:update onSent:^(PBWatch *watch, NSDictionary *update, NSError *error)
+     {
+         if (!error)
+         {
+             NSLog(@"Successfully sent message.");
+         }
+         else
+         {
+             NSLog(@"Error sending message: %@", error);
+         }
+     }];
 }
 
 @end
